@@ -1,0 +1,424 @@
+# Jeff Renchen 5/16/2014
+# This is an updated version of my original code, which includes code created by Dave Bryan/Ben Ruttenburg in order to
+# reduce the overall length and complexity of code. This code will calculate yearly densities/abundance using RVC data from
+# 2000 to 2012.
+# This code will calculate weighted densities of RVC Data
+
+# Clear workspace variables
+rm(list=ls(all=TRUE))   		
+
+# Set the working directory to RVC analysis ready datafiles
+# Server
+setwd('G:/Common/FINFISH/Visuals_RVC_NCRMP/RVC DATA 1979-2012')
+# OR personal
+# setwd('C:/Documents and Settings/jeffrey.renchen/My Documents/RVC/RVC DATA 1979-2012')
+
+#--------------------------------------------------------------------------------------------------
+#
+# Read in Raw data and Filter Based on Your Criteria
+#
+#--------------------------------------------------------------------------------------------------
+
+# You will need to change what yearly data you read into R based on the years of interest
+# Use the "analysis ready" rvc datasets, and also decide which species are of interest
+# Remove a "#" for any species/years of interest, or add additional species to the list in the same format
+
+# Select Species of Interest and add a (#) symbol before "specieslist<-..." for those NOT needed
+specieslist<-NULL
+#specieslist<-append(specieslist,'EPI ITAJ')	# Jewfish
+#specieslist<-append(specieslist,'EPI MORI')	# Red Grouper
+#specieslist<-append(specieslist,'EPI STRI')	# Nassau Grouper
+#specieslist<-append(specieslist,'LAC MAXI')	# Hogfish
+#specieslist<-append(specieslist,'LUT ANAL')	# Mutton Snapper
+#specieslist<-append(specieslist,'LUT CYAN')	# Cubera Snapper
+#specieslist<-append(specieslist,'LUT GRIS')	# Gray Snapper
+#specieslist<-append(specieslist,'LUT JOCU')	# Dog Snapper
+#specieslist<-append(specieslist,'LUT MAHO')	# Mahogony Snapper
+#specieslist<-append(specieslist,'LUT SYNA')	# Lane Snapper
+#specieslist<-append(specieslist,'LUT APOD')	# Schoolmaster Snapper
+#specieslist<-append(specieslist,'MYC BONA')	# Black Grouper
+#specieslist<-append(specieslist,'MYC INTE')	# Yellowfin Grouper
+#specieslist<-append(specieslist,'MYC MICR')	# Gag Grouper
+#specieslist<-append(specieslist,'MYC VENE')	# Yellowmouth Grouper
+#specieslist<-append(specieslist,'OCY CHRY')	# Yellowtail Snapper
+#specieslist<-append(specieslist,'SPH BARR')	# Barracuda
+specieslist<-append(specieslist,'TRA FALC')	# Permit
+
+# Place fish species in a more stable variable and wipe original (In place for re-runs)
+slist<-unique(specieslist)
+specieslist<-NULL
+
+# Read in Dataset and comment out unneeded years (# symbol)
+# Need to reduce datasize by filtering for species of interest each year unless computer has enough memory and processing power
+rvcall00<-read.csv('fk2000_dat1.csv', header=T)
+rvcall01<-read.csv('fk2001_dat1.csv', header=T)
+rvcall02<-read.csv('fk2002_dat1.csv', header=T)
+rvcall03<-read.csv('fk2003_dat1.csv', header=T)
+rvcall04<-read.csv('fk2004_dat1.csv', header=T)
+rvcall05<-read.csv('fk2005_dat1.csv', header=T)
+rvcall06<-read.csv('fk2006_dat1.csv', header=T)
+rvcall07<-read.csv('fk2007_dat1.csv', header=T)
+rvcall08<-read.csv('fk2008_dat1.csv', header=T)
+rvcall09<-read.csv('fk2009_dat1.csv', header=T)
+rvcall10<-read.csv('fk2010_dat1.csv', header=T)
+rvcall11<-read.csv('fk2011_dat1.csv', header=T)
+rvcall12<-read.csv('fk2012_dat1.csv', header=T)
+
+# Compile Data into one object
+# NOTE: Only compile the years that you brought in above or you will receive an error
+rvcall<-rbind(rvcall01,rvcall02,rvcall03,rvcall04,rvcall05,rvcall06,rvcall07,rvcall08,rvcall09,rvcall10,rvcall11,rvcall12)
+
+# Filter species of interest
+rvcall<-subset(rvcall,SPECIES_CD %in% slist)
+
+# You can also filter for certain years here
+rvcall<-subset(rvcall,YEAR>=2006)
+
+# Filter out Non-RVC Habitats (almost always keep this)
+rvcall<-subset(rvcall,!(HABITAT_CD %in% c('SAND_NA','SGRS_NA','UCHB_LR','ARTF_NA')))
+
+# Filter out low-vis data. 3.5 to 4 is typically used
+rvc<-subset(rvcall,rvcall$UNDERWATER_VISIBILITY>=3.5)
+
+# Also combine subregions 9 and 10 into just 9
+rvc$SUBREGION_NR<-with(rvc, ifelse(SUBREGION_NR==10,'9',SUBREGION_NR))
+
+# Select the subregions within your study area
+# Lower Keys (8); Middle/Mid-Upper Keys (10); Upper Keys (11); Biscayne (12)
+#rvc<-subset(rvc,rvc$SUBREGION_NR==12)
+
+# Add in protected(1) or unprotected(0) field
+rvc$prot<-with(rvc,ifelse(MPA_NR>0,1,0))
+
+# Filter out experimental winter surveys (These were done in 2004/2005)
+rvc<-subset(rvc,rvc$MONTH>3)
+
+# Reduce Data size
+rvcsub<-subset(rvc,select=c(YEAR,PRIMARY_SAMPLE_UNIT,STATION_NR,depth,HABITAT_CD,ZONE_NR,
+	SUBREGION_NR,prot,SPECIES_CD,len,num,TIME_SEEN))
+
+# Set Output Working Directory to where you have your ntot/length files
+# Default is the stable RVC R_code folder
+setwd('G:/Common/FINFISH/Visuals_RVC_NCRMP/R_Code')
+
+
+#--------------------------------------------------------------------------------------------------
+#
+# Edit Late RVC Counts for Meandering Species
+#
+#--------------------------------------------------------------------------------------------------
+
+# Decide as a group what species within your species list should be considered "site attached"
+
+# List site attached species
+site<-c('MYC BONA','EPI MORI','MYC INTE','LUT SYNA','LUT APOD','EPI ITAJ','EPI STRI',
+	'MYC MICR','MYC VENE')
+
+# Change time seen from 3 to 2 for site attached species
+for(i in 1:length(rvcsub$TIME_SEEN))
+{
+	for(j in 1:length(site))
+	{
+		if(rvcsub[i,'SPECIES_CD']==site[j])
+		{	
+			if(rvcsub[i,'TIME_SEEN']==3)
+			{
+			rvcsub[i,'TIME_SEEN']<-2
+			}
+		} 
+	}
+}
+
+# Reduce counts to 0 when Time seen=3 for meandering species
+rvcsub$num<-with(rvcsub,ifelse(TIME_SEEN==3,0,num))
+rvcsub$len<-with(rvcsub,ifelse(TIME_SEEN==3,0,len))
+
+#--------------------------------------------------------------------------------------------------
+#
+# Calculate Average Depths and create foredep
+#
+#--------------------------------------------------------------------------------------------------
+
+# Calculate the average station depth (TIME_SEEN just a placeholder)
+stndepth<-aggregate(rvcsub$TIME_SEEN, by=list(rvcsub$YEAR,rvcsub$PRIMARY_SAMPLE_UNIT,rvcsub$STATION_NR,rvcsub$depth),FUN=length)
+colnames(stndepth)<-c('YEAR','PSU','STATION_NR','depth')
+
+# Calculate the average PSU depth based on the previously calculated station depths
+psudepths<-aggregate(stndepth$depth,by=list(stndepth$YEAR,stndepth$PSU),FUN=mean)
+colnames(psudepths)<-c('YEAR','PSU','PSU_Depth')
+
+# Bring the calculated PSU depth back into the main dataset by merging based on Year and PSU
+rvcsub1<-merge(rvcsub,psudepths,by.x=c('YEAR','PRIMARY_SAMPLE_UNIT'),by.y=c('YEAR','PSU'))
+rvcsub1$depth<-NULL
+rvcsub<-rvcsub1
+
+#Create foredep variable
+rvcsub$foredep <- with(rvcsub, ifelse(ZONE_NR==4 & PSU_Depth<6,"1", 
+  ifelse(ZONE_NR==4 & 6.0<=PSU_Depth & PSU_Depth<18.0,"2",
+  ifelse(ZONE_NR==4 & PSU_Depth>=18.0,"3",0))))
+rvcsub$foredep <- with(rvcsub, ifelse(HABITAT_CD=="SPGR_HR", "1", foredep))
+
+#--------------------------------------------------------------------------------------------------
+#
+# Create strata
+#
+#--------------------------------------------------------------------------------------------------
+
+# Use "if" statements to assign strata type to a PSU based on zone, foredep, and habitat
+# Anything not assigned a strata will be given a -999, which means there is an error
+rvcsub$strat<-with(rvcsub, ifelse(HABITAT_CD=="SPGR_HR","HRRF",
+ifelse(ZONE_NR==1,"INPR",
+ifelse(ZONE_NR==2,"MCPR",
+ifelse(ZONE_NR==3,"OFPR",
+ifelse(HABITAT_CD=="CONT_LR" & foredep==1,"FSLR",
+ifelse(HABITAT_CD=="ISOL_LR" & foredep==1,"FSLR",
+ifelse(HABITAT_CD=="RUBB_LR" & foredep==1,"FSLR",
+ifelse(HABITAT_CD=="SPGR_LR" & foredep==1,"FSLR",
+ifelse(HABITAT_CD=="ISOL_MR" & foredep==1,"FSLR",
+ifelse(foredep==2,"FMLR",
+ifelse(foredep==3 & prot==0,"FDLR",  
+ifelse(foredep==3 & prot==1,"FMLR",
+-999)))))))))))))
+
+# Use this to check for -999 errors
+# unique(rvcsub$strat)
+
+
+#--------------------------------------------------------------------------------------------------
+#
+# Create Legal and Sublegal count variables
+#
+#--------------------------------------------------------------------------------------------------
+
+# You will need a txt or excel file that contains a list of maximum size limits for each species of interest
+# Read in Maximum Size Limits (may need to move this file, or change working directory)
+# setwd('G:/')
+lengths<-read.csv('lengths.csv',header=T)
+
+# Add the legal and sublegal variables to the dataframe
+rvcsub$L_num<-0
+rvcsub$NL_num<-0
+
+# Add the True/False variables for legal and sublegal
+rvcsub$L<-NULL
+rvcsub$NL<-NULL
+
+# List of Species that we are interested in 
+fish<-as.vector(unique(rvcsub$SPECIES_CD))
+
+# This loop looks up the size limits for each fish species. It will copy the value from
+# 'num' into either L_num or NL_num depending on if is > or < the size limit
+for(i in 1:length(fish))
+{
+	mlen<-subset(lengths$max_size,lengths$RVC_name==fish[i])
+	rvcsub$NL<-(rvcsub$SPECIES_CD==fish[i] & rvcsub$len<mlen)
+	rvcsub$L<-(rvcsub$SPECIES_CD==fish[i] & rvcsub$len>=mlen)
+	rvcsub$NL_num<-rvcsub$num*rvcsub$NL+rvcsub$NL_num
+	rvcsub$L_num<-rvcsub$num*rvcsub$L+rvcsub$L_num
+}
+
+# Removes the NL and L dummy variables
+rvcsub<-subset(rvcsub,select=YEAR:NL_num)
+
+# Sum station abundance
+rvcsub1<-aggregate(cbind(rvcsub$num,rvcsub$L_num,rvcsub$NL_num),by=list(rvcsub$YEAR,rvcsub$SPECIES_CD,
+	rvcsub$prot, rvcsub$SUBREGION_NR,rvcsub$strat,rvcsub$PRIMARY_SAMPLE_UNIT,rvcsub$STATION_NR),FUN=sum)
+colnames(rvcsub1)<-c('YEAR','SPECIES_CD','prot','subregion','strat','PSU','STATION_NR','num','L_num','NL_num')
+
+
+#--------------------------------------------------------------------------------------------------
+#
+# Calculate Mean PSU fish densities and remove stations
+#
+#--------------------------------------------------------------------------------------------------
+
+# Now that you have the station abundance, average the stations to get PSU density/abundance
+rvc.psu<-with(rvcsub1,aggregate(cbind(rvcsub1$num,rvcsub1$L_num,rvcsub1$NL_num),by=list(rvcsub1$YEAR,
+	rvcsub1$SPECIES_CD,rvcsub1$prot, rvcsub1$subregion,rvcsub1$strat,rvcsub1$PSU),FUN=mean))
+colnames(rvc.psu)<-c('YEAR','SPECIES','prot','subregion','strat','PSU','yi','yi_L','yi_NL')
+
+# zz is just a dummy matrix to hold the variance vectors for the different size classes
+zz<-with(rvcsub1,aggregate(cbind(rvcsub1$num,rvcsub1$L_num,rvcsub1$NL_num),by=list(rvcsub1$YEAR,rvcsub1$SPECIES_CD,rvcsub1$prot,
+	rvcsub1$subregion,rvcsub1$strat,rvcsub1$PSU),FUN=var))
+rvc.psu$vari<-zz[,7]
+rvc.psu$vari_L<-zz[,8]
+rvc.psu$vari_NL<-zz[,9]
+rm(zz)
+
+# m is the number of stations sampled per PSU
+rvc.psu$m<-with(rvcsub1,aggregate(num,by=list(rvcsub1$YEAR,rvcsub1$SPECIES_CD,rvcsub1$prot,rvcsub1$subregion,
+	rvcsub1$strat,rvcsub1$PSU),FUN=length))[,7]
+
+# Create np.freq variable, for those with m>1 replicates
+# This will distinguish between regular counts and tripod counts
+rvc.psu$np.freq<-with(rvc.psu, ifelse(m>1,1,0))
+
+# replaces NA values in variance with 0
+rvc.psu$vari<-with(rvc.psu, ifelse(is.na(vari),0,vari))
+rvc.psu$vari_L<-with(rvc.psu, ifelse(is.na(vari_L),0,vari_L))
+rvc.psu$vari_NL<-with(rvc.psu, ifelse(is.na(vari_NL),0,vari_NL))
+
+# Calculate the average abundance and avg stations sampled per strata
+rvc.strat<-with(rvc.psu,aggregate(cbind(yi,yi_L,yi_NL,m),by=list(YEAR,SPECIES,prot,strat),FUN=mean))
+colnames(rvc.strat)<-c('YEAR','SPECIES','prot','strat','yi','yi_L','yi_NL','m')
+
+# Calculate the number of PSUs sampled per strata (n)
+rvc.strat$n <- with(rvc.psu, aggregate(yi, by = list(YEAR,SPECIES,prot,strat), FUN = length))[,5]
+
+# Aggregate sum of vari, m and np.freq
+# (xx is temp dataframe to hold varm, nm and np data)
+xx<- with(rvc.psu, aggregate(cbind(vari,vari_L,vari_NL,m,np.freq), by = list(YEAR,SPECIES,prot,strat), FUN = sum))
+rvc.strat$varm <- xx[,5]
+rvc.strat$varm_L<-xx[,6]
+rvc.strat$varm_NL<-xx[,7]
+rvc.strat$nm <- xx[,8]
+rvc.strat$np <- xx[,9]
+rm(xx)
+
+# Calculate the sample variance of density among primary unit means in a specific strata
+rvc.strat$s1 <- with(rvc.psu, aggregate(yi, by = list(YEAR, SPECIES, prot, strat), FUN = var))[,5]
+rvc.strat$s1_L <- with(rvc.psu, aggregate(yi_L, by = list(YEAR, SPECIES, prot, strat), FUN = var))[,5]
+rvc.strat$s1_NL <- with(rvc.psu, aggregate(yi_NL, by = list(YEAR, SPECIES, prot, strat), FUN = var))[,5]
+
+# Calculate the sample variance among diver stations within primary units in a specific strata
+rvc.strat$s2 <- with(rvc.strat, ifelse(np>0,varm/np,0))
+rvc.strat$s2_L <- with(rvc.strat, ifelse(np>0,varm_L/np,0))
+rvc.strat$s2_NL <- with(rvc.strat, ifelse(np>0,varm_NL/np,0))
+
+
+#--------------------------------------------------------------------------------------------------
+#
+# Calculate ntots
+#
+#--------------------------------------------------------------------------------------------------
+
+# Set working directory to ntot file
+setwd('G:/Common/FINFISH/Visuals_RVC_NCRMP/R_Code')
+
+# Read in ntots
+ntots<-read.csv('fk12_ntot_steve.csv')
+ntots<-ntots[!ntots$habclass=='UNCR_UN',]
+ntots$prot<-with(ntots,ifelse(mpa_nr>0,1,0))
+
+# Assign strat to ntot file (or rfhab in SAS)
+ntots$strat<-with(ntots, ifelse(habclass=="SPGR_HR","HRRF",
+ifelse(zone_nr==1,"INPR",
+ifelse(zone_nr==2,"MCPR",
+ifelse(zone_nr==3,"OFPR",
+ifelse(foredep==1,"FSLR",
+ifelse(foredep==2,"FMLR",
+ifelse(foredep==3, "FDLR",  
+ifelse(foredep==3 & prot==1,"FMLR",
+-999)))))))))
+
+# Sum the ntots based on the level you are interested in
+ntot_agg<-with(ntots, aggregate(ntot, by=list(prot,subreg_nr,strat),FUN=sum))
+colnames(ntot_agg) <-c('prot','subregion','strat','ntot')
+
+# Remove subregions not being considered from ntot list
+reg<-unique(rvcsub$SUBREGION_NR)
+ntot_agg<-ntot_agg[ntot_agg$subregion %in% reg,]
+
+# If you are NOT interested in regional differences, combine subregion
+ntot_agg<-with(ntot_agg,aggregate(ntot,by=list(strat,prot),FUN=sum))
+colnames(ntot_agg)<-c('strat','prot','ntot')
+
+# ngrtot calculation
+ntot_agg$ngrtot <- sum(ntot_agg$ntot)
+ntot_agg$wh<-ntot_agg$ntot/ntot_agg$ngrtot 
+
+# Merge ntot with rvc.strat
+rvc.strat_T<-merge(rvc.strat, ntot_agg, by = c('strat','prot'))
+rvc.strat_L<-merge(rvc.strat, ntot_agg, by = c('strat','prot'))
+rvc.strat_NL<-merge(rvc.strat, ntot_agg, by = c('strat','prot'))
+
+# Calculate number of diver cylinders per PSU (200mx200m grid)
+mtot <-round((200*200)/(pi*7.5^2),0)
+
+# Overall
+rvc.strat_T$fn <- with(rvc.strat_T, n/ntot) 
+rvc.strat_T$fm <- with(rvc.strat_T, m/mtot)
+rvc.strat_T$vbar_dns <- with(rvc.strat_T, ((1-fn)*s1/n)+((fn*(1-fm)*s2)/nm))
+rvc.strat_T$wavdns <- with(rvc.strat_T, wh*yi)
+rvc.strat_T$wvbar <- with(rvc.strat_T, (wh^2)*vbar_dns)
+rvc.strat_T$nmtot <- with(rvc.strat_T, ntot*mtot)
+rvc.strat_T$yt <- with(rvc.strat_T, nmtot*yi)
+rvc.strat_T$vbar_yt <- with(rvc.strat_T, (nmtot^2)*vbar_dns)
+rvc.strat_T$counter <- 1
+
+# Legal Sized Fish
+rvc.strat_L$fn <- with(rvc.strat_L, n/ntot) 
+rvc.strat_L$fm <- with(rvc.strat_L, m/mtot)
+rvc.strat_L$vbar_dns_L <- with(rvc.strat_L, ((1-fn)*s1_L/n)+((fn*(1-fm)*s2_L)/nm))
+rvc.strat_L$wavdns_L <- with(rvc.strat_L, wh*yi_L)
+rvc.strat_L$wvbar_L <- with(rvc.strat_L, (wh^2)*vbar_dns_L)
+rvc.strat_L$nmtot <- with(rvc.strat_L, ntot*mtot)
+rvc.strat_L$yt_L <- with(rvc.strat_L, nmtot*yi_L)
+rvc.strat_L$vbar_yt_L <- with(rvc.strat_L, (nmtot^2)*vbar_dns_L)
+rvc.strat_L$counter <- 1
+
+# SubLegal Sized Fish
+rvc.strat_NL$fn <- with(rvc.strat_NL, n/ntot) 
+rvc.strat_NL$fm <- with(rvc.strat_NL, m/mtot)
+rvc.strat_NL$vbar_dns_NL <- with(rvc.strat_NL, ((1-fn)*s1_NL/n)+((fn*(1-fm)*s2_NL)/nm))
+rvc.strat_NL$wavdns_NL <- with(rvc.strat_NL, wh*yi_NL)
+rvc.strat_NL$wvbar_NL <- with(rvc.strat_NL, (wh^2)*vbar_dns_NL)
+rvc.strat_NL$nmtot <- with(rvc.strat_NL, ntot*mtot)
+rvc.strat_NL$yt_NL <- with(rvc.strat_NL, nmtot*yi_NL)
+rvc.strat_NL$vbar_yt_NL <- with(rvc.strat_NL, (nmtot^2)*vbar_dns_NL)
+rvc.strat_NL$counter <- 1
+
+# Domain computations Overall
+rvc.domain_T <- with(rvc.strat_T, aggregate(cbind(n, nm, wavdns, wvbar, yt, vbar_yt, 
+	counter), by = list(YEAR, prot, SPECIES), FUN = sum, na.rm = TRUE))
+colnames(rvc.domain_T) <- c('YEAR', 'prot','SPECIES','n','nm','avD','vbar_D',
+	'ytot','vbar_ytot','nstrat')
+
+# Domain computations Legal Fish
+rvc.domain_L <- with(rvc.strat_L, aggregate(cbind(n, nm, wavdns_L, wvbar_L, yt_L, 
+	vbar_yt_L, counter), by = list(YEAR, prot, SPECIES), FUN = sum, na.rm = TRUE))
+colnames(rvc.domain_L) <- c('YEAR', 'prot','SPECIES','n','nm','avD_L','vbar_DL',
+	'ytot_L','vbar_ytot_L','nstrat')
+
+# Domain computations SubLegal Fish
+rvc.domain_NL <- with(rvc.strat_NL, aggregate(cbind(n, nm, wavdns_NL, wvbar_NL, yt_NL,
+	 vbar_yt_NL, counter), by = list(YEAR, prot, SPECIES), FUN = sum, na.rm = TRUE))
+colnames(rvc.domain_NL) <- c('YEAR', 'prot','SPECIES','n','nm','avD_NL','vbar_DNL',
+	'ytot_NL','vbar_ytot_NL','nstrat')
+
+# Calculate mean strata sampled between subregions
+rvc.domain_T$nstrat_avg<-with(rvc.domain_T,nstrat/length(reg))
+rvc.domain_L$nstrat_avg<-with(rvc.domain_L,nstrat/length(reg))
+rvc.domain_NL$nstrat_avg<-with(rvc.domain_NL,nstrat/length(reg))
+
+# Overall SE
+rvc.domain_T$se_D <- with(rvc.domain_T, sqrt(vbar_D))
+rvc.domain_T$cv_D <- with(rvc.domain_T, (se_D/avD)*100)
+rvc.domain_T$se_ytot <- with(rvc.domain_T, sqrt(vbar_ytot))
+
+# Legal SE
+rvc.domain_L$se_DL <- with(rvc.domain_L, sqrt(vbar_DL))
+rvc.domain_L$cv_DL <- with(rvc.domain_L, (se_DL/avD_L)*100)
+rvc.domain_L$se_ytot_L <- with(rvc.domain_L, sqrt(vbar_ytot_L))
+
+# Sublegal SE
+rvc.domain_NL$se_DNL <- with(rvc.domain_NL, sqrt(vbar_DNL))
+rvc.domain_NL$cv_DNL <- with(rvc.domain_NL, (se_DNL/avD_NL)*100)
+rvc.domain_NL$se_ytot_NL <- with(rvc.domain_NL, sqrt(vbar_ytot_NL))
+
+#------------------------------------------------------------------------------------------
+#
+# Output Data
+#
+#------------------------------------------------------------------------------------------
+
+# This will output to your current working directory, which is where you grabbed the analysis-ready data
+# from earlier. Put in a working directory change if the output location is different than the input location
+
+# Change working directory
+#setwd("C:/Users/jeffrey.renchen/Desktop/R_Scrap")
+
+# Create a .csv file for the domain output
+write.csv(rvc.domain_T,'Overall_Density.csv')
+write.csv(rvc.domain_L,'Legal_Density.csv')
+write.csv(rvc.domain_NL,'Sublegal_Density.csv')
